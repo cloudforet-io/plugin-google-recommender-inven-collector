@@ -6,7 +6,6 @@ from cloudforet.plugin.config.global_conf import (
     BIGQUERY_RECOMMENDERS,
     RECOMMENDATION_TYPE_DOCS_URL,
     UNAVAILABLE_RECOMMENDER_IDS,
-    RECOMMENDATION_MAP,
 )
 from abc import abstractmethod
 from cloudforet.plugin.connector.recommender.recommendation import (
@@ -17,7 +16,8 @@ import requests
 from bs4 import BeautifulSoup
 from cloudforet.plugin.utils.converter import Converter
 
-_LOGGER = logging.getLogger(__name__)
+# _LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("spaceone")
 
 
 class AllRecommendationsManager(ResourceManager):
@@ -90,6 +90,7 @@ class AllRecommendationsManager(ResourceManager):
         for rec_parent in self.rec_parent_to_recs:
             if not self._is_category(self.rec_parent_to_recs[rec_parent][0]):
                 continue
+            
             recommender_id = rec_parent.split("/")[-1]
             product, product_service = recommender_id.split(".")[:2]
             product = self.converter.convert_product_or_product_service_name(product)
@@ -206,6 +207,7 @@ recommendations?project={self.project_id}",
 
                 for recommender_id in recommender_ids:
                     _LOGGER.debug(f"category: {category}, recommender_id: {recommender_id}, name: {name}, short_description: {short_description}")
+                    # print(f"recommender_id(key): {recommender_id}, category: {category}, name: {name}, short_description: {short_description}")
                     self.recommender_map[recommender_id] = {
                         "category": category,
                         "name": name,
@@ -213,7 +215,7 @@ recommendations?project={self.project_id}",
                     }
         except Exception as e:
             _LOGGER.error(f"Error occurred while crawling recommendation type docs: {e}")
-            self.recommender_map = RECOMMENDATION_MAP
+            # self.recommender_map = RECOMMENDATION_MAP
 
     def _parse_recommendation(self, rec: dict) -> dict:
         
@@ -333,26 +335,14 @@ recommendations?project={self.project_id}",
             cloud_service_group, postfix = service.split(".", 1)
             cloud_service_type = cloud_service_type.lower()
 
-            if cloud_service_group not in parents_and_locations_map:
-                parents_and_locations_map[cloud_service_group] = {}
-            else:
-                if (
-                    cloud_service_type
-                    not in parents_and_locations_map[cloud_service_group]
-                ):
-                    parents_and_locations_map[cloud_service_group][
-                        cloud_service_type
-                    ] = [locations]
+            if cloud_service_group in parents_and_locations_map:
+                if cloud_service_type in parents_and_locations_map[cloud_service_group]:
+                    if locations not in parents_and_locations_map[cloud_service_group][cloud_service_type]:
+                        parents_and_locations_map[cloud_service_group][cloud_service_type].append(locations)
                 else:
-                    if (
-                        locations
-                        not in parents_and_locations_map[cloud_service_group][
-                            cloud_service_type
-                        ]
-                    ):
-                        parents_and_locations_map[cloud_service_group][
-                            cloud_service_type
-                        ].append(locations)
+                    parents_and_locations_map[cloud_service_group][cloud_service_type] = [locations]
+            else:
+                parents_and_locations_map[cloud_service_group] = {cloud_service_type: [locations]}
 
         for group, cst_and_locations in parents_and_locations_map.items():
             all_locations = set()
@@ -367,12 +357,10 @@ recommendations?project={self.project_id}",
         recommender_map = self.recommender_map
         for key, value in recommender_map.items():
             prefix, cloud_service_group, cloud_service_type, *others = key.split(".")
-            if not (
-                cloud_service_type.endswith("Commitments")
-                or cloud_service_type.endswith("Recommender")
-            ):
+            if not (cloud_service_type.endswith("Commitments") or cloud_service_type.endswith("Recommender")):
                 if cloud_service_group == "cloudsql":
                     cloud_service_group = "sqladmin"
+
                 recommender_map[key]["cloudServiceGroup"] = cloud_service_group
                 recommender_map[key]["cloudServiceType"] = cloud_service_type.lower()
             else:
@@ -381,46 +369,49 @@ recommendations?project={self.project_id}",
 
     def _add_locations_to_recommender_map(self, parents_and_locations_map):
         recommender_map = self.recommender_map
-        delete_services = []
+        delete_services = set()
         for service, cst in parents_and_locations_map.items():
             if not cst:
-                delete_services.append(service)
+                _LOGGER.warning(f"parents_and_locations_map: cloud_service_group: {service} has no cloud_service_type")
+                delete_services.add(service)
 
         for service in delete_services:
             del parents_and_locations_map[service]
 
+        _LOGGER.debug(f"--------------------------------------------------------")
+        for group, cst_and_locations in parents_and_locations_map.items():
+            _LOGGER.debug(f"parents_and_locations_map: key: {group}, value: {cst_and_locations}")
+
+
         for key, value in self.recommender_map.items():
-            cloud_service_group = value["cloudServiceGroup"]
-            cloud_service_type = value["cloudServiceType"]
+            cloud_service_group = value["cloudServiceGroup"]  # compute
+            cloud_service_type = value["cloudServiceType"]   # commitment, image, address, disk, instance, None, instancegroupmanager, instance, 
 
-            for service, cst_and_locations in parents_and_locations_map.items():
-                if cloud_service_group == service:
-                    for service_key, locations in cst_and_locations.items():
-                        if cloud_service_type == service_key:
-                            recommender_map[key]["locations"] = locations
+            cst_and_locations = parents_and_locations_map.get(cloud_service_group, None)
+            if not cst_and_locations:
+                _LOGGER.warning(f"No matching cloud_service_group: {cloud_service_group} found in parents_and_locations_map for recommender_id: {key}")
+                continue
+            
+            locations = cst_and_locations.get(cloud_service_type, None)
+            if locations:
+                recommender_map[key]["locations"] = locations
+            
+            if ("locations" not in recommender_map[key] and cloud_service_group == "compute"):
+                if cst_and_locations.get("instance", None):
+                    if cloud_service_type == "commitment":
+                        recommender_map[key]["locations"] = (self.converter.convert_zone_to_region(cst_and_locations["instance"]))
+                    else:
+                        recommender_map[key]["locations"] = cst_and_locations["instance"]
 
-                    if (
-                        "locations" not in recommender_map[key]
-                        and cloud_service_group == "compute"
-                    ):
-                        recommender_map[key]["locations"] = cst_and_locations[
-                            "instance"
-                        ]
-
-                        if cloud_service_type == "commitment":
-                            recommender_map[key]["locations"] = (
-                                self.converter.convert_zone_to_region(
-                                    cst_and_locations["instance"]
-                                )
-                            )
-
-                    if "locations" not in recommender_map[key]:
-                        recommender_map[key]["locations"] = cst_and_locations[
-                            "all_locations"
-                        ]
+            if "locations" not in recommender_map[key]:
+                recommender_map[key]["locations"] = cst_and_locations["all_locations"]
 
             if "locations" not in recommender_map[key]:
                 recommender_map[key]["locations"] = ["global"]
 
             if "global" not in recommender_map[key]["locations"]:
                 recommender_map[key]["locations"].append("global")
+
+        _LOGGER.debug(f"--------------------------------------------------------") 
+        for key, value in recommender_map.items():
+            _LOGGER.debug(f"recommender_map key: {key}, value: {value}")

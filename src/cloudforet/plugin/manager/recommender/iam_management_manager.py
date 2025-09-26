@@ -9,7 +9,8 @@ from cloudforet.plugin.connector.recommender.recommendation import (
 from cloudforet.plugin.manager import ResourceManager
 from cloudforet.plugin.utils.converter import Converter
 
-_LOGGER = logging.getLogger(__name__)
+# _LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("spaceone")
 
 
 class IAMManagementRecommendationManager(ResourceManager):
