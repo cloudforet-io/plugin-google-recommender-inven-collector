@@ -1,5 +1,6 @@
-import time
 import logging
+import os
+import time
 
 from spaceone.inventory.plugin.collector.lib.server import CollectorPluginServer
 
@@ -32,7 +33,13 @@ def collector_collect(params: dict) -> dict:
     options = params["options"]
     secret_data = params["secret_data"]
     schema = params.get("schema")
-    
+
+    proxy_env = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy_env:
+        _LOGGER.debug(
+            f"** Using proxy in environment variable HTTPS_PROXY/https_proxy: {proxy_env}"
+        )  # src/cloudforet/plugin/connector/base.py _create_http_client
+
     resource_mgrs = ResourceManager.list_managers()
     for manager in resource_mgrs:
         start_time = time.time()
